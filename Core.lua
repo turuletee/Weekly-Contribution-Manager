@@ -29,6 +29,7 @@ function TTSBT:OnEnable()
     self:RegisterEvent("GUILDBANKLOG_UPDATE")
     self:RegisterEvent("PLAYER_LOGIN")
     self.TrackedPlayers:RequestRosterUpdate()
+    self.MinimapButton:Initialize()
 end
 
 function TTSBT:PLAYER_LOGIN()
@@ -67,6 +68,7 @@ local HELP_TEXT = table.concat({
     "  |cffffff00setfirstweek <0-5>|r - pick week 1 (0=current Tue, max 5 weeks back)",
     "  |cffffff00prune|r - delete eligible old weeks now",
     "  |cffffff00show|r - open the main window",
+    "  |cffffff00minimap|r - toggle the minimap button visibility",
 }, "\n")
 
 function TTSBT:HandleSlashCommand(input)
@@ -114,6 +116,10 @@ function TTSBT:HandleSlashCommand(input)
         self:CmdPrune()
     elseif cmd == "show" then
         self.UI:OpenMain()
+    elseif cmd == "minimap" then
+        self.MinimapButton:Toggle()
+        local hidden = self.db.profile.minimap and self.db.profile.minimap.hide
+        self:Print("minimap button " .. (hidden and "hidden" or "shown"))
     elseif cmd == "help" then
         self:Print(HELP_TEXT)
     else
