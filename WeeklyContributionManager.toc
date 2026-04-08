@@ -2,8 +2,10 @@
 ## Title: Weekly Contribution Manager
 ## Notes: Track guild bank contributions per week for officers
 ## Author: Nachorizo
-## Version: 0.0.1
+## Version: 0.1.0
 ## SavedVariables: WeeklyContributionManagerDB
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
+
+Libs\embeds.xml
 
 Core.lua
