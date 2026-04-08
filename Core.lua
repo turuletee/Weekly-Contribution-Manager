@@ -25,6 +25,8 @@ end
 
 function TTSBT:OnEnable()
     self:RegisterEvent("GUILD_ROSTER_UPDATE")
+    self:RegisterEvent("GUILDBANKFRAME_OPENED")
+    self:RegisterEvent("GUILDBANKLOG_UPDATE")
     self.TrackedPlayers:RequestRosterUpdate()
 end
 
@@ -32,11 +34,19 @@ function TTSBT:GUILD_ROSTER_UPDATE()
     self.TrackedPlayers:InvalidateRosterCache()
 end
 
+function TTSBT:GUILDBANKFRAME_OPENED()
+    self.BankReader:OnGuildBankOpened()
+end
+
+function TTSBT:GUILDBANKLOG_UPDATE()
+    self.BankReader:OnGuildBankLogUpdate()
+end
+
 -- ----------------------------------------------------------------------
 -- Slash command dispatcher
 -- ----------------------------------------------------------------------
 
-local HELP_TEXT = "commands: |cffffff00status|r, |cffffff00week|r, |cffffff00track <name>|r, |cffffff00untrack <name>|r, |cffffff00tracked|r, |cffffff00roster [rankIndex] [search]|r, |cffffff00ranks|r"
+local HELP_TEXT = "commands: |cffffff00status|r, |cffffff00week|r, |cffffff00track <name>|r, |cffffff00untrack <name>|r, |cffffff00tracked|r, |cffffff00roster [rankIndex] [search]|r, |cffffff00ranks|r, |cffffff00scan|r, |cffffff00history [weeks]|r"
 
 function TTSBT:HandleSlashCommand(input)
     input = (input or ""):trim()
@@ -62,6 +72,10 @@ function TTSBT:HandleSlashCommand(input)
         self:CmdRoster(rest)
     elseif cmd == "ranks" then
         self:CmdRanks()
+    elseif cmd == "scan" then
+        self:CmdScan()
+    elseif cmd == "history" then
+        self:CmdHistory(rest)
     else
         self:Print("unknown command: " .. cmd)
         self:Print(HELP_TEXT)
@@ -133,6 +147,53 @@ function TTSBT:CmdRanks()
     self:Print("|cffffff00Guild ranks|r:")
     for _, r in ipairs(ranks) do
         self:Print(string.format("  [%d] %s", r.index, r.name))
+    end
+end
+
+function TTSBT:CmdScan()
+    if not IsInGuild() then self:Print("not in a guild") return end
+    self:Print("requesting guild bank money log... (must be at the guild bank)")
+    self.BankReader:RequestLog()
+end
+
+local function copperToGoldString(c)
+    c = c or 0
+    local g = math.floor(c / 10000)
+    local s = math.floor((c % 10000) / 100)
+    return string.format("%dg %ds", g, s)
+end
+
+function TTSBT:CmdHistory(args)
+    local W = self.WeekEngine
+    local nWeeksToShow = tonumber((args or ""):match("(%d+)")) or 4
+    local hist = self.db.profile.weeklyHistory
+    local currentWeek = W:GetCurrentWeekStart()
+    self:Print(string.format("|cffffff00History (last %d weeks)|r:", nWeeksToShow))
+    local anyData = false
+    for i = 0, nWeeksToShow - 1 do
+        local weekStart = W:AddWeeks(currentWeek, -i)
+        local week = hist[weekStart]
+        local label = (i == 0) and " (current)" or string.format(" (-%d)", i)
+        self:Print("|cff999999" .. W:FormatWeek(weekStart) .. label .. "|r")
+        if week and (week.contributions or week.manualMarks) then
+            anyData = true
+            local names = {}
+            for n in pairs(week.contributions or {}) do names[n] = true end
+            for n in pairs(week.manualMarks or {}) do names[n] = true end
+            local sorted = {}
+            for n in pairs(names) do table.insert(sorted, n) end
+            table.sort(sorted)
+            for _, n in ipairs(sorted) do
+                local bank = (week.contributions and week.contributions[n]) or 0
+                local mark = (week.manualMarks and week.manualMarks[n]) or 0
+                self:Print(string.format("    %s: %s bank, %s manual", n, copperToGoldString(bank), copperToGoldString(mark)))
+            end
+        else
+            self:Print("    (no data)")
+        end
+    end
+    if not anyData then
+        self:Print("no contributions recorded yet. Open the guild bank or run /ttsbt scan while there.")
     end
 end
 

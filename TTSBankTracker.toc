@@ -11,3 +11,4 @@ Libs\embeds.xml
 Core.lua
 WeekEngine.lua
 TrackedPlayers.lua
+BankReader.lua
