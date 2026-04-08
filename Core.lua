@@ -274,6 +274,8 @@ local HELP_TEXT = table.concat({
     "  |cffffff00raid set <player> <status>|r - set status manually (ok|late_no|late_w|abs_w|abs_no|vac|cancel)",
     "  |cffffff00raid dkp <player> <delta>|r - adjust DKP by delta (e.g. +5 or -10)",
     "  |cffffff00raid resettier [label]|r - reset all DKP and attendance for a new tier",
+    "  |cffffff00dkp <player>|r - post a single player's DKP to /raid chat",
+    "  |cffffff00dkp all|r - post DKP for everyone in the current raid group",
 }, "\n")
 
 function TTSGCM:HandleSlashCommand(input)
@@ -347,6 +349,8 @@ function TTSGCM:DispatchSlashCommand(input)
         if self.UI then self.UI:RefreshMain() end
     elseif cmd == "raid" then
         self:CmdRaid(rest)
+    elseif cmd == "dkp" then
+        self:CmdDKPAnnounce(rest)
     elseif cmd == "help" then
         self:Print(HELP_TEXT)
     else
@@ -683,6 +687,70 @@ function TTSGCM:CmdRaid(args)
         self:Print("|cffff5555tier reset|r" .. (label and (" - " .. label) or ""))
     else
         self:Print("usage: /gcm raid <mark|show|set|dkp|resettier> ...")
+    end
+end
+
+-- Posts DKP standings to the /raid (or /party) channel so the whole
+-- group can see them in chat without opening the addon.
+--   /gcm dkp <player>     post one player's DKP
+--   /gcm dkp all          post every current raid member's DKP
+function TTSGCM:CmdDKPAnnounce(args)
+    args = (args or ""):trim()
+    if args == "" then
+        self:Print("usage: /gcm dkp <player>  |  /gcm dkp all")
+        return
+    end
+    local channel
+    if IsInRaid and IsInRaid() then
+        channel = "RAID"
+    elseif IsInGroup and IsInGroup() then
+        channel = "PARTY"
+    else
+        self:Print("|cffff5555not in a raid or party - cannot post to /raid|r")
+        return
+    end
+
+    local AT = self.AssistanceTracker
+
+    if args:lower() == "all" then
+        local n = (GetNumGroupMembers and GetNumGroupMembers()) or 0
+        if n == 0 then
+            self:Print("no group members to list")
+            return
+        end
+        -- Collect (display_name, dkp) for each raid member
+        local lines = {}
+        for i = 1, n do
+            local rosterName = GetRaidRosterInfo and GetRaidRosterInfo(i) or nil
+            if rosterName then
+                local dkp, canonical = AT:GetDKPByBareName(rosterName)
+                table.insert(lines, string.format("%s: %d",
+                    (canonical or rosterName):gsub("%-.*$", ""), dkp))
+            end
+        end
+        -- Header line so the raid sees who posted what
+        SendChatMessage("[TTS GCM] DKP standings:", channel)
+        -- Batch into ~200-char chunks to avoid the 255-char chat cap
+        -- and to keep messages readable
+        local current = ""
+        for _, line in ipairs(lines) do
+            if current == "" then
+                current = line
+            elseif #current + 3 + #line > 200 then
+                SendChatMessage(current, channel)
+                current = line
+            else
+                current = current .. " | " .. line
+            end
+        end
+        if current ~= "" then
+            SendChatMessage(current, channel)
+        end
+    else
+        local target = args:match("^(%S+)")
+        local dkp, canonical = AT:GetDKPByBareName(target)
+        local display = (canonical or target):gsub("%-.*$", "")
+        SendChatMessage(string.format("[TTS GCM] %s: DKP %d", display, dkp), channel)
     end
 end
 

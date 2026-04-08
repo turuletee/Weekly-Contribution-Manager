@@ -117,16 +117,21 @@ local function getOrCreateRaidEventForToday()
     return A.raidEvents[eventId]
 end
 
--- Counts how many tardy events (any kind) the player has accumulated
--- since the start of the current tier. Used by the +1000g escalation.
-local function countTardiesThisTier(name)
+-- Counts how many `late_no_notice` events the player has accumulated
+-- since the start of the current tier. Used by the escalating
+-- surcharge (+1000g for the 2nd, +2000g for the 3rd, etc).
+--
+-- IMPORTANT: only no-notice tardies count toward the escalation.
+-- `late_w_notice` does NOT count and is NEVER fined - if you tell
+-- the raid leader ahead of time, there's no gold penalty.
+local function countLateNoNoticeThisTier(name)
     local A = getAssist()
     local since = A.tierStartedAt or 0
     local count = 0
     for _, event in pairs(A.raidEvents) do
         if (event.createdAt or 0) >= since then
             local s = event.attendance and event.attendance[name]
-            if s == STATUS.LATE_NO_NOTICE or s == STATUS.LATE_W_NOTICE then
+            if s == STATUS.LATE_NO_NOTICE then
                 count = count + 1
             end
         end
@@ -156,8 +161,11 @@ local function appendAuditLog(name, delta, reason, source)
         time = time(), player = name, delta = delta,
         reason = reason or "", source = source or "manual",
     })
-    -- Cap the log at 500 entries to keep saved-vars manageable.
-    while #A.dkpAuditLog > 500 do
+    -- Cap the log at 200 entries to keep saved-vars manageable. A
+    -- typical 5-month season at 3 raids/week is ~60 raid days, and
+    -- most events generate 0-2 audit entries per player, so 200 is
+    -- comfortably above the worst-case load.
+    while #A.dkpAuditLog > 200 do
         table.remove(A.dkpAuditLog, 1)
     end
 end
@@ -168,6 +176,24 @@ end
 
 function AssistanceTracker:GetDKP(name)
     return getAssist().dkp[name] or 0
+end
+
+-- Case-insensitive, realm-stripped lookup. The user can type just
+-- "Pipa" in slash commands and the addon resolves it to the canonical
+-- tracked name (e.g. "Pipa-Ragnaros") so DKP is read from the right
+-- bucket. Returns (dkpValue, canonicalName) so the caller can also
+-- print the proper full name in chat.
+function AssistanceTracker:GetDKPByBareName(name)
+    if not name then return 0, name end
+    local A = getAssist()
+    if A.dkp[name] then return A.dkp[name], name end  -- exact match
+    local bare = (name:gsub("%-.*$", "")):lower()
+    for tracked in pairs(getProfile().trackedPlayers) do
+        if (tracked:gsub("%-.*$", "")):lower() == bare then
+            return A.dkp[tracked] or 0, tracked
+        end
+    end
+    return 0, name
 end
 
 function AssistanceTracker:AdjustDKP(name, delta, reason, source)
@@ -256,25 +282,22 @@ local function applyStatusEffects(name, status, event)
     elseif status == STATUS.LATE_NO_NOTICE then
         dkpDelta = rules.dkpLateNoNotice or -5
         local base = rules.lateNoNoticeBase or 0
-        -- "From the 2nd tardy onward, +1000g extra" - applied as a
-        -- flat surcharge, not escalating. countTardiesThisTier
-        -- includes the new entry because attendance was written
-        -- before this function was called.
-        local extras = countTardiesThisTier(name)
-        if extras >= 2 then
-            base = base + (rules.repeatTardyExtra or 0)
-        end
+        -- ESCALATING surcharge for repeat no-notice tardiness:
+        --   1st: base
+        --   2nd: base + 1*1000g
+        --   3rd: base + 2*1000g
+        --   ...
+        -- countLateNoNoticeThisTier includes the new event because
+        -- attendance was written before this function was called.
+        local count = countLateNoNoticeThisTier(name)
+        local extraSteps = math.max(0, count - 1)
+        base = base + (rules.repeatTardyExtra or 0) * extraSteps
         goldFine = base
         fineReason = "late_no_notice"
     elseif status == STATUS.LATE_W_NOTICE then
+        -- DKP penalty only - no gold fine and no escalation. If you
+        -- told the raid leader you'd be late, you don't get fined.
         dkpDelta = rules.dkpLateWithNotice or -5
-        -- No gold base for "late w/ notice" but the +1000g surcharge
-        -- DOES apply (rules say "regardless of motive" for repeat tardy).
-        local extras = countTardiesThisTier(name)
-        if extras >= 2 then
-            goldFine = rules.repeatTardyExtra or 0
-            fineReason = "tardy_repeat"
-        end
     elseif status == STATUS.ABSENT_W_NOTICE then
         dkpDelta = rules.dkpAbsentWithNotice or -5
     elseif status == STATUS.ABSENT_NO_NOTICE then
@@ -309,21 +332,16 @@ local function reverseStatusEffects(name, status, event)
     if status == STATUS.LATE_NO_NOTICE then
         dkpDelta = -(rules.dkpLateNoNotice or -5)
         local base = rules.lateNoNoticeBase or 0
-        -- countTardiesThisTier still includes this event (caller hasn't
-        -- overwritten attendance yet), so the surcharge condition
+        -- countLateNoNoticeThisTier still includes this event (caller
+        -- hasn't overwritten attendance yet), so the escalation count
         -- evaluates the same way the original charge did. Reverses
         -- exactly the amount applyStatusEffects added.
-        local extras = countTardiesThisTier(name)
-        if extras >= 2 then
-            base = base + (rules.repeatTardyExtra or 0)
-        end
+        local count = countLateNoNoticeThisTier(name)
+        local extraSteps = math.max(0, count - 1)
+        base = base + (rules.repeatTardyExtra or 0) * extraSteps
         goldFine = -base
     elseif status == STATUS.LATE_W_NOTICE then
         dkpDelta = -(rules.dkpLateWithNotice or -5)
-        local extras = countTardiesThisTier(name)
-        if extras >= 2 then
-            goldFine = -(rules.repeatTardyExtra or 0)
-        end
     elseif status == STATUS.ABSENT_W_NOTICE then
         dkpDelta = -(rules.dkpAbsentWithNotice or -5)
     elseif status == STATUS.ABSENT_NO_NOTICE then
@@ -385,24 +403,61 @@ local function getCurrentRaidNamesSet()
     return set
 end
 
--- Marks today's raid event: in-raid players -> ok, tracked players
--- not in raid -> absent_no_notice. Returns counts for chat feedback.
+-- Marks today's raid event.
+--
+-- First scan of the day (event.scannedAt == 0): every tracked player
+-- gets set to either ok or absent_no_notice based on whether they're
+-- in the raid group right now.
+--
+-- Subsequent scans: ONLY flip absent_no_notice -> ok for players who
+-- weren't in raid before but are now (i.e. they showed up late).
+-- Anyone already marked something else (ok, late_*, vacation, etc.)
+-- is left alone. This matches the user spec: re-clicking the button
+-- should never downgrade an existing mark.
+--
+-- Returns: event, presentCount, absentCount, latePromoted
 function AssistanceTracker:MarkRaidGroup()
     local event = getOrCreateRaidEventForToday()
+    -- firstScannedAt is set the FIRST time MarkRaidGroup runs for this
+    -- event. We track it separately from scannedAt (which updates on
+    -- every scan) so a pre-button manual status override doesn't get
+    -- overwritten by a subsequent button click.
+    local isFirstScan = (event.firstScannedAt or 0) == 0
+    if isFirstScan then event.firstScannedAt = time() end
     event.scannedAt = time()
     local raidSet = getCurrentRaidNamesSet()
-    local presentCount, absentCount = 0, 0
+    local presentCount, absentCount, latePromoted = 0, 0, 0
+
     for trackedName in pairs(getProfile().trackedPlayers) do
         local bare = trackedName:gsub("%-.*$", ""):lower()
-        if raidSet[bare] then
-            self:SetStatus(event.id, trackedName, STATUS.OK)
-            presentCount = presentCount + 1
+        local inRaid = raidSet[bare] ~= nil
+        local current = event.attendance and event.attendance[trackedName]
+
+        if isFirstScan then
+            if inRaid then
+                self:SetStatus(event.id, trackedName, STATUS.OK)
+                presentCount = presentCount + 1
+            else
+                self:SetStatus(event.id, trackedName, STATUS.ABSENT_NO_NOTICE)
+                absentCount = absentCount + 1
+            end
         else
-            self:SetStatus(event.id, trackedName, STATUS.ABSENT_NO_NOTICE)
-            absentCount = absentCount + 1
+            if inRaid then
+                if current == nil or current == STATUS.ABSENT_NO_NOTICE then
+                    if current == STATUS.ABSENT_NO_NOTICE then
+                        latePromoted = latePromoted + 1
+                    end
+                    self:SetStatus(event.id, trackedName, STATUS.OK)
+                end
+                presentCount = presentCount + 1
+            else
+                if current == STATUS.ABSENT_NO_NOTICE or current == nil then
+                    absentCount = absentCount + 1
+                end
+            end
         end
     end
-    return event, presentCount, absentCount
+    return event, presentCount, absentCount, latePromoted
 end
 
 -- ----------------------------------------------------------------------
