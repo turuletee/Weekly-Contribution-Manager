@@ -6,9 +6,9 @@ _G.TTSBT = TTSBT -- expose for in-game debugging via /dump TTSBT
 
 local defaults = {
     profile = {
-        minContribution = 0,    -- gold required per tracked player per week
+        minContribution = 0,    -- copper required per tracked player per week (sticky default for new weeks)
         trackedPlayers = {},    -- [playerName] = true
-        weeklyHistory = {},     -- [weekStartTimestamp] = { [playerName] = copperContributed }
+        weeklyHistory = {},     -- [weekStartTimestamp] = { minimum, contributions = {[name]=copper}, manualMarks = {[name]=copper} }
         installTime = 0,        -- set on first run, used to bound how far back the user can pick week 1
         -- firstWeekStart: timestamp of the user-chosen "week 1" Tuesday. Absent until configured.
     },
@@ -46,7 +46,17 @@ end
 -- Slash command dispatcher
 -- ----------------------------------------------------------------------
 
-local HELP_TEXT = "commands: |cffffff00status|r, |cffffff00week|r, |cffffff00track <name>|r, |cffffff00untrack <name>|r, |cffffff00tracked|r, |cffffff00roster [rankIndex] [search]|r, |cffffff00ranks|r, |cffffff00scan|r, |cffffff00history [weeks]|r"
+local HELP_TEXT = table.concat({
+    "|cffffff00TTS Bank Tracker commands|r:",
+    "  |cffffff00status|r / |cffffff00week|r / |cffffff00scan|r / |cffffff00history [N]|r",
+    "  |cffffff00track <name>|r / |cffffff00untrack <name>|r / |cffffff00tracked|r",
+    "  |cffffff00roster [rankIndex] [search]|r / |cffffff00ranks|r",
+    "  |cffffff00setmin <gold>|r - set this week's minimum",
+    "  |cffffff00mark <player> <gold>|r - manually credit a player this week",
+    "  |cffffff00clearmark <player>|r - clear this week's manual mark for a player",
+    "  |cffffff00unpaid|r / |cffffff00owed [player]|r",
+    "  |cffffff00setfirstweek <0-5>|r - pick week 1 (0=current Tue, max 5 weeks back)",
+}, "\n")
 
 function TTSBT:HandleSlashCommand(input)
     input = (input or ""):trim()
@@ -76,6 +86,18 @@ function TTSBT:HandleSlashCommand(input)
         self:CmdScan()
     elseif cmd == "history" then
         self:CmdHistory(rest)
+    elseif cmd == "setmin" then
+        self:CmdSetMin(rest)
+    elseif cmd == "mark" then
+        self:CmdMark(rest)
+    elseif cmd == "clearmark" then
+        self:CmdClearMark(rest)
+    elseif cmd == "unpaid" then
+        self:CmdUnpaid()
+    elseif cmd == "owed" then
+        self:CmdOwed(rest)
+    elseif cmd == "setfirstweek" then
+        self:CmdSetFirstWeek(rest)
     else
         self:Print("unknown command: " .. cmd)
         self:Print(HELP_TEXT)
@@ -156,15 +178,9 @@ function TTSBT:CmdScan()
     self.BankReader:RequestLog()
 end
 
-local function copperToGoldString(c)
-    c = c or 0
-    local g = math.floor(c / 10000)
-    local s = math.floor((c % 10000) / 100)
-    return string.format("%dg %ds", g, s)
-end
-
 function TTSBT:CmdHistory(args)
     local W = self.WeekEngine
+    local D = self.DebtEngine
     local nWeeksToShow = tonumber((args or ""):match("(%d+)")) or 4
     local hist = self.db.profile.weeklyHistory
     local currentWeek = W:GetCurrentWeekStart()
@@ -174,7 +190,8 @@ function TTSBT:CmdHistory(args)
         local weekStart = W:AddWeeks(currentWeek, -i)
         local week = hist[weekStart]
         local label = (i == 0) and " (current)" or string.format(" (-%d)", i)
-        self:Print("|cff999999" .. W:FormatWeek(weekStart) .. label .. "|r")
+        local minStr = D:FormatCopper(D:GetMinForWeek(weekStart))
+        self:Print(string.format("|cff999999%s%s  min: %s|r", W:FormatWeek(weekStart), label, minStr))
         if week and (week.contributions or week.manualMarks) then
             anyData = true
             local names = {}
@@ -186,7 +203,7 @@ function TTSBT:CmdHistory(args)
             for _, n in ipairs(sorted) do
                 local bank = (week.contributions and week.contributions[n]) or 0
                 local mark = (week.manualMarks and week.manualMarks[n]) or 0
-                self:Print(string.format("    %s: %s bank, %s manual", n, copperToGoldString(bank), copperToGoldString(mark)))
+                self:Print(string.format("    %s: bank %s, manual %s", n, D:FormatCopper(bank), D:FormatCopper(mark)))
             end
         else
             self:Print("    (no data)")
@@ -195,6 +212,80 @@ function TTSBT:CmdHistory(args)
     if not anyData then
         self:Print("no contributions recorded yet. Open the guild bank or run /ttsbt scan while there.")
     end
+end
+
+function TTSBT:CmdSetMin(args)
+    local g = tonumber((args or ""):match("([%d%.]+)"))
+    if not g then self:Print("usage: /ttsbt setmin <gold>") return end
+    local copper = self.DebtEngine:GoldToCopper(g)
+    self.DebtEngine:SetCurrentWeekMin(copper)
+    self:Print(string.format("this week's minimum set to %s", self.DebtEngine:FormatCopper(copper)))
+end
+
+function TTSBT:CmdMark(args)
+    local name, g = (args or ""):match("^(%S+)%s+([%d%.]+)$")
+    if not name or not g then self:Print("usage: /ttsbt mark <player> <gold>") return end
+    local copper = self.DebtEngine:GoldToCopper(tonumber(g))
+    local W = self.WeekEngine:GetCurrentWeekStart()
+    self.DebtEngine:ManualMark(name, W, copper)
+    self:Print(string.format("marked %s with +%s for current week", name, self.DebtEngine:FormatCopper(copper)))
+end
+
+function TTSBT:CmdClearMark(args)
+    local name = (args or ""):match("^(%S+)")
+    if not name then self:Print("usage: /ttsbt clearmark <player>") return end
+    local W = self.WeekEngine:GetCurrentWeekStart()
+    self.DebtEngine:ClearManualMark(name, W)
+    self:Print("cleared manual mark for " .. name .. " (current week)")
+end
+
+function TTSBT:CmdUnpaid()
+    local W = self.WeekEngine:GetCurrentWeekStart()
+    local D = self.DebtEngine
+    if not self.db.profile.firstWeekStart then
+        self:Print("first tracked week not set yet. Use /ttsbt setfirstweek <0-5>")
+        return
+    end
+    local list = D:GetUnpaidPlayersForWeek(W)
+    if #list == 0 then
+        self:Print("|cff33ff99all tracked players are paid up for the current week|r")
+        return
+    end
+    self:Print(string.format("|cffff5555Unpaid (%d)|r:", #list))
+    for _, name in ipairs(list) do
+        local owed = D:GetOwedAtStartOfWeek(name, W)
+        local paid = D:GetPaidForWeek(name, W)
+        local rem = D:GetRemainingForWeek(name, W)
+        self:Print(string.format("  %s: owes %s (paid %s of %s)", name, D:FormatCopper(rem), D:FormatCopper(paid), D:FormatCopper(owed)))
+    end
+end
+
+function TTSBT:CmdOwed(args)
+    local D = self.DebtEngine
+    local W = self.WeekEngine:GetCurrentWeekStart()
+    local name = (args or ""):match("^(%S+)")
+    if not name then
+        self:Print("usage: /ttsbt owed <player>")
+        return
+    end
+    local owed = D:GetOwedAtStartOfWeek(name, W)
+    local paid = D:GetPaidForWeek(name, W)
+    local rem = D:GetRemainingForWeek(name, W)
+    self:Print(string.format("|cffffff00%s|r this week:", name))
+    self:Print(string.format("  owed:      %s", D:FormatCopper(owed)))
+    self:Print(string.format("  paid:      %s", D:FormatCopper(paid)))
+    self:Print(string.format("  remaining: %s", D:FormatCopper(rem)))
+end
+
+function TTSBT:CmdSetFirstWeek(args)
+    local n = tonumber((args or ""):match("(%d+)"))
+    if not n then self:Print("usage: /ttsbt setfirstweek <0-5> (weeks back from current)") return end
+    if n < 0 or n > 5 then self:Print("must be 0-5 (max 5 weeks back from current)") return end
+    local W = self.WeekEngine
+    local current = W:GetCurrentWeekStart()
+    local chosen = W:AddWeeks(current, -n)
+    self.db.profile.firstWeekStart = chosen
+    self:Print("first tracked week set to: " .. W:FormatWeek(chosen))
 end
 
 -- Helper for sanity-checking the WeekEngine math from in-game.
