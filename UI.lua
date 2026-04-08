@@ -106,14 +106,15 @@ local function buildHeader(parent)
     header:SetFullWidth(true)
     header:SetLayout("Flow")
 
-    -- Week label
+    -- Week label (with HIATUS badge if active)
     local weekLabel = AceGUI:Create("Label")
+    local hiatusBadge = TTSGCM:IsHiatusActive() and ("  " .. colored("[HIATUS]", "ff66ccff")) or ""
     if TTSGCM.db.profile.firstWeekStart then
         local idx = W:GetWeekIndex(currentWeek, TTSGCM.db.profile.firstWeekStart)
-        weekLabel:SetText(colored("Week " .. idx, "ffffff00") .. "  " .. W:FormatWeek(currentWeek))
+        weekLabel:SetText(colored("Week " .. idx, "ffffff00") .. "  " .. W:FormatWeek(currentWeek) .. hiatusBadge)
     else
         weekLabel:SetText(colored("Current week", "ffffff00") .. "  " .. W:FormatWeek(currentWeek)
-            .. "  " .. colored("(first week not set)", "ffff5555"))
+            .. "  " .. colored("(first week not set)", "ffff5555") .. hiatusBadge)
     end
     weekLabel:SetWidth(380)
     header:AddChild(weekLabel)
@@ -285,6 +286,16 @@ local function buildBottomBar(parent)
     historyBtn:SetWidth(120)
     historyBtn:SetCallback("OnClick", function() UI:ShowHistory() end)
     bottom:AddChild(historyBtn)
+
+    local hiatusBtn = AceGUI:Create("Button")
+    hiatusBtn:SetText(TTSGCM:IsHiatusActive() and "End Hiatus" or "Start Hiatus")
+    hiatusBtn:SetWidth(120)
+    hiatusBtn:SetCallback("OnClick", function()
+        local nowOn = TTSGCM:ToggleHiatus()
+        TTSGCM:Print("hiatus " .. (nowOn and "STARTED - debt accrual frozen" or "ENDED - debt accrual resumed"))
+        UI:RefreshMain()
+    end)
+    bottom:AddChild(hiatusBtn)
 
     local pruneBtn = AceGUI:Create("Button")
     pruneBtn:SetText("Prune History")
@@ -751,6 +762,10 @@ end
 -- ----------------------------------------------------------------------
 
 local function buildMainContents(frame)
+    -- Stamp any new hiatus weeks that have rolled over since the last
+    -- refresh, so the data is consistent before we render anything.
+    TTSGCM:EnsureHiatusUpToCurrent()
+
     frame:ReleaseChildren()
     frame:SetLayout("List")
 

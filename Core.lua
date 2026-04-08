@@ -14,6 +14,8 @@ local defaults = {
         installTime = 0,               -- set on first run, used to bound how far back the user can pick week 1
         lastScanTime = 0,              -- timestamp of the last successful bank scan (for stale-scan warnings)
         debug = false,                 -- toggle verbose diagnostic prints in chat
+        hiatusActive = false,          -- when true, weeks are flagged as hiatus and don't accrue debt
+        hiatusActivatedAt = 0,         -- timestamp when current hiatus was started (0 if never)
         -- firstWeekStart: timestamp of the user-chosen "week 1" Tuesday. Absent until configured.
     },
 }
@@ -51,6 +53,8 @@ local function validateProfile(profile)
     if profile.firstWeekStart ~= nil and type(profile.firstWeekStart) ~= "number" then
         profile.firstWeekStart = nil
     end
+    if type(profile.hiatusActive) ~= "boolean" then profile.hiatusActive = false end
+    if type(profile.hiatusActivatedAt) ~= "number" then profile.hiatusActivatedAt = 0 end
 end
 
 function TTSGCM:OnInitialize()
@@ -89,6 +93,62 @@ function TTSGCM:CheckStaleScan()
     end
 end
 
+-- ----------------------------------------------------------------------
+-- Hiatus
+-- ----------------------------------------------------------------------
+
+-- Walks from the week containing hiatusActivatedAt up to the current
+-- week and stamps every week's `hiatus` flag. Idempotent. Called when
+-- the user toggles hiatus on, on every UI refresh, and at OnEnable so
+-- new weeks that rolled over while hiatus was on get their stamps
+-- without needing a dedicated "weekly tick" event.
+function TTSGCM:EnsureHiatusUpToCurrent()
+    if not (self.db and self.db.profile and self.db.profile.hiatusActive) then return end
+    local activatedAt = self.db.profile.hiatusActivatedAt or 0
+    if activatedAt == 0 then return end
+    local W = self.WeekEngine
+    local hist = self.db.profile.weeklyHistory
+    local cursor = W:GetWeekStart(activatedAt)
+    local current = W:GetCurrentWeekStart()
+    local guard = 0
+    while cursor <= current and guard < 520 do
+        local week = hist[cursor]
+        if not week then
+            week = { contributions = {}, manualMarks = {} }
+            hist[cursor] = week
+        end
+        week.hiatus = true
+        cursor = W:AddWeeks(cursor, 1)
+        guard = guard + 1
+    end
+end
+
+function TTSGCM:IsHiatusActive()
+    return self.db and self.db.profile and self.db.profile.hiatusActive == true
+end
+
+function TTSGCM:StartHiatus()
+    self.db.profile.hiatusActive = true
+    self.db.profile.hiatusActivatedAt = time()
+    self:EnsureHiatusUpToCurrent()
+end
+
+function TTSGCM:EndHiatus()
+    self.db.profile.hiatusActive = false
+    -- Note: we keep hiatusActivatedAt and the per-week hiatus flags
+    -- intact. Past hiatus weeks should remain hiatus weeks even after
+    -- the break ends.
+end
+
+function TTSGCM:ToggleHiatus()
+    if self:IsHiatusActive() then
+        self:EndHiatus()
+    else
+        self:StartHiatus()
+    end
+    return self:IsHiatusActive()
+end
+
 function TTSGCM:OnEnable()
     self:RegisterEvent("GUILD_ROSTER_UPDATE")
     -- GUILDBANKFRAME_OPENED was removed in patch 10.0 (Dragonflight,
@@ -102,6 +162,7 @@ function TTSGCM:OnEnable()
     -- and pruned in its handler, but AceAddon's OnEnable typically runs
     -- AFTER PLAYER_LOGIN has already fired, so the handler would never
     -- be called on first login. OnEnable is the right hook.
+    self:EnsureHiatusUpToCurrent()
     local n = self.HistoryPruner:Prune()
     if n > 0 then
         self:Print(string.format("pruned %d old week(s) from history", n))
@@ -150,6 +211,7 @@ local HELP_TEXT = table.concat({
     "  |cffffff00minimap|r - toggle the minimap button visibility",
     "  |cffffff00dumpweek|r - print raw current-week data for debugging",
     "  |cffffff00debug|r - toggle verbose scan diagnostics",
+    "  |cffffff00hiatus|r - toggle raid hiatus (debt stops accruing)",
 }, "\n")
 
 function TTSGCM:HandleSlashCommand(input)
@@ -217,6 +279,10 @@ function TTSGCM:DispatchSlashCommand(input)
     elseif cmd == "debug" then
         self.db.profile.debug = not self.db.profile.debug
         self:Print("debug mode " .. (self.db.profile.debug and "ON" or "OFF"))
+    elseif cmd == "hiatus" then
+        local nowOn = self:ToggleHiatus()
+        self:Print("hiatus " .. (nowOn and "STARTED - debt accrual frozen" or "ENDED - debt accrual resumed"))
+        if self.UI then self.UI:RefreshMain() end
     elseif cmd == "help" then
         self:Print(HELP_TEXT)
     else

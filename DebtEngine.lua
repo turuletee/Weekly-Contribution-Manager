@@ -49,9 +49,33 @@ end
 -- The "kind" parameter selects which to read.
 -- ----------------------------------------------------------------------
 
+-- True if a week is flagged as a hiatus week. Hiatus weeks have their
+-- minimum forced to 0 and skip the 1.5x penalty multiplier.
+local function isHiatusWeek(weekStart)
+    local hist = TTSGCM.db.profile.weeklyHistory
+    local week = hist[weekStart]
+    if week and week.hiatus then return true end
+    -- The current week may not have its stamp yet if hiatus was
+    -- toggled on this session and we haven't run EnsureHiatusUpToCurrent.
+    -- Fall back to the global flag for the live current week.
+    if TTSGCM.db.profile.hiatusActive
+            and weekStart == TTSGCM.WeekEngine:GetCurrentWeekStart() then
+        return true
+    end
+    return false
+end
+
 local function getMinByKind(weekStart, kind)
     local W = TTSGCM.WeekEngine
     local profile = TTSGCM.db.profile
+    if type(weekStart) ~= "number" then
+        if kind == "alchemist" then return profile.alchemistMinContribution or 0 end
+        return profile.minContribution or 0
+    end
+    weekStart = W:GetWeekStart(weekStart)
+    -- Hiatus weeks always have min 0, regardless of whatever was stored.
+    if isHiatusWeek(weekStart) then return 0 end
+
     local stickyDefault, fieldName
     if kind == "alchemist" then
         stickyDefault = profile.alchemistMinContribution or 0
@@ -60,20 +84,25 @@ local function getMinByKind(weekStart, kind)
         stickyDefault = profile.minContribution or 0
         fieldName = "minimum"
     end
-    if type(weekStart) ~= "number" then return stickyDefault end
-    weekStart = W:GetWeekStart(weekStart)
     local hist = profile.weeklyHistory
     local firstWeek = profile.firstWeekStart
     local cursor = weekStart
     local guard = 0
     while cursor and (not firstWeek or cursor >= firstWeek) and guard < 520 do
         local week = hist[cursor]
-        if week and type(week[fieldName]) == "number" then return week[fieldName] end
+        -- Skip hiatus weeks during the sticky-fallback walk (we don't
+        -- want a hiatus week's stored 0 to mask a non-hiatus week's
+        -- real value further back)
+        if week and not week.hiatus and type(week[fieldName]) == "number" then
+            return week[fieldName]
+        end
         cursor = W:AddWeeks(cursor, -1)
         guard = guard + 1
     end
     return stickyDefault
 end
+
+DebtEngine._isHiatusWeek = isHiatusWeek  -- expose for tests / introspection
 
 function DebtEngine:GetMinForWeek(weekStart)
     return getMinByKind(weekStart, "regular")
@@ -205,7 +234,10 @@ function DebtEngine:GetOwedAtStartOfWeek(player, weekStart)
         local prevPaid = self:GetPaidForWeek(player, cursor)
         local prevUnpaid = math.max(0, owed - prevPaid)
         cursor = W:AddWeeks(cursor, 1)
-        owed = math.floor(prevUnpaid * 1.5 + 0.5) + minFn(cursor)
+        -- Hiatus weeks freeze: no penalty multiplier on prior debt and
+        -- no new minimum added (minFn returns 0 for hiatus weeks).
+        local multiplier = isHiatusWeek(cursor) and 1.0 or 1.5
+        owed = math.floor(prevUnpaid * multiplier + 0.5) + minFn(cursor)
         guard = guard + 1
     end
     return owed
