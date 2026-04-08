@@ -3,9 +3,6 @@
 -- minimap with LibDBIcon-1.0. Left-click toggles the main window;
 -- right-click triggers an immediate bank scan; tooltip shows a quick
 -- summary of paid/unpaid for the current week.
---
--- The icon path is currently a placeholder (a coin icon from the
--- Blizzard art) until the user provides the real one.
 
 local TTSGCM = LibStub("AceAddon-3.0"):GetAddon("TTSGuildContributionManager")
 local LDB = LibStub("LibDataBroker-1.1", true)
@@ -14,7 +11,10 @@ local LDBIcon = LibStub("LibDBIcon-1.0", true)
 local MinimapButton = {}
 TTSGCM.MinimapButton = MinimapButton
 
-local PLACEHOLDER_ICON = "Interface\\Icons\\INV_Misc_Coin_01"
+-- The Three Tanks Strat shield logo, 64x64 TGA bundled with the addon
+-- under Media/. WoW resolves Interface\AddOns\<addon>\... paths
+-- relative to the AddOns directory.
+local ADDON_ICON = "Interface\\AddOns\\TTSGuildContributionManager\\Media\\icon.tga"
 local DATAOBJECT_NAME = "TTSGuildContributionManager"
 
 local function buildTooltipUnsafe(tooltip)
@@ -72,7 +72,7 @@ function MinimapButton:Initialize()
         dataObject = LDB:NewDataObject(DATAOBJECT_NAME, {
             type = "launcher",
             text = "TTS Guild Contribution Manager",
-            icon = PLACEHOLDER_ICON,
+            icon = ADDON_ICON,
             OnClick = function(_, button)
                 if button == "RightButton" then
                     TTSGCM.BankReader:RequestLog()
