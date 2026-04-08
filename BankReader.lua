@@ -67,18 +67,29 @@ local function normalizeName(name)
     return name:gsub("%-.*$", "")
 end
 
--- WoW player names are unique case-insensitively but the bank log and the
--- guild roster sometimes return them in slightly different casings. To
--- avoid losing deposits because the bank log returned "alanas" while the
--- tracked entry is "Alanas", look up the canonical tracked name and use it
--- as the key. Falls back to the original name if no tracked match exists.
+-- WoW player names are unique case-insensitively, but the guild roster
+-- (GetGuildRosterInfo) returns "Name-Realm" for cross-realm/connected
+-- realms, while the guild bank money log returns just "Name". So a
+-- bare-name comparison always misses when the player belongs to a
+-- connected realm.
+--
+-- We compare both sides as (lowercased, realm-stripped) but RETURN the
+-- full tracked name (with realm intact) so it keys into the contributions
+-- table the same way trackedPlayers does. UI lookups iterate
+-- trackedPlayers using the full name and find the contribution by exact
+-- match.
+local function bareKey(name)
+    if not name then return nil end
+    return (name:gsub("%-.*$", "")):lower()
+end
+
 local function canonicalizeAgainstTracked(name)
     if not name then return name end
     local tracked = TTSGCM.db.profile.trackedPlayers
     if tracked[name] then return name end  -- exact match, fast path
-    local lower = name:lower()
+    local key = bareKey(name)
     for trackedName in pairs(tracked) do
-        if trackedName:lower() == lower then return trackedName end
+        if bareKey(trackedName) == key then return trackedName end
     end
     return name
 end
