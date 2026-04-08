@@ -107,10 +107,10 @@ function BankReader:RequestLog()
     local atBank = C:IsAtGuildBank()
     local tab = C:GetMoneyLogTab()
     local ok = C:QueryGuildBankLog(tab)
-    TTSGCM:Print(string.format("|cff66ccffQueryGuildBankLog(tab=%d) called (sent=%s, atBank=%s)|r",
+    TTSGCM:Debug(string.format("|cff66ccffQueryGuildBankLog(tab=%d) called (sent=%s, atBank=%s)|r",
         tab, tostring(ok), tostring(atBank)))
     if not atBank then
-        TTSGCM:Print("|cffaaaaaa(scanning works best when the guild bank UI is open. Walk to the bank NPC.)|r")
+        TTSGCM:Debug("|cffaaaaaa(scanning works best when the guild bank UI is open. Walk to the bank NPC.)|r")
     end
 end
 
@@ -120,7 +120,7 @@ end
 function BankReader:ProcessLog()
     local C = TTSGCM.Compat
     local n = C:GetNumGuildBankMoneyTransactions()
-    TTSGCM:Print(string.format("|cff66ccffProcessLog: %d transaction(s) in money log|r", n))
+    TTSGCM:Debug(string.format("|cff66ccffProcessLog: %d transaction(s) in money log|r", n))
     if n == 0 then return 0 end
 
     local now = C:Now()
@@ -150,8 +150,8 @@ function BankReader:ProcessLog()
         table.insert(typeReport, string.format("%s=%d", k, v))
     end
     table.sort(typeReport)
-    TTSGCM:Print("|cff66ccffmoney log types: " .. table.concat(typeReport, ", ") .. "|r")
-    TTSGCM:Print(string.format("|cff66ccffparsed %d deposit(s)|r", #txs))
+    TTSGCM:Debug("|cff66ccffmoney log types: " .. table.concat(typeReport, ", ") .. "|r")
+    TTSGCM:Debug(string.format("|cff66ccffparsed %d deposit(s)|r", #txs))
 
     if #txs == 0 then return 0 end
 
@@ -177,7 +177,10 @@ function BankReader:ProcessLog()
             updated = updated + 1
         end
     end
-    TTSGCM:Print(string.format("|cff33ff99wrote %d week(s) of contributions|r", updated))
+    -- One concise user-visible success line per scan, plus record the
+    -- timestamp so the stale-scan warning knows when we last got data.
+    TTSGCM:Print(string.format("|cff33ff99scanned %d deposit(s) across %d week(s)|r", #txs, updated))
+    TTSGCM:RecordScanComplete()
     return updated
 end
 

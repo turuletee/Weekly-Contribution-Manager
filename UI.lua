@@ -76,6 +76,16 @@ end
 -- LIST VIEW
 -- ----------------------------------------------------------------------
 
+-- Format an "X ago" duration for the last-scan label.
+local function formatRelative(ts)
+    if not ts or ts == 0 then return "never" end
+    local diff = math.max(0, time() - ts)
+    if diff < 60 then return diff .. "s ago" end
+    if diff < 3600 then return math.floor(diff / 60) .. "m ago" end
+    if diff < 86400 then return math.floor(diff / 3600) .. "h ago" end
+    return math.floor(diff / 86400) .. "d ago"
+end
+
 local function buildHeader(parent)
     local W = TTSGCM.WeekEngine
     local D = TTSGCM.DebtEngine
@@ -167,11 +177,16 @@ local function buildSummary(parent, list, currentWeek)
 
     local summary = AceGUI:Create("Label")
     summary:SetFullWidth(true)
-    summary:SetText(string.format("Tracked: %d    %s    %s    %s",
+    -- Last scan suffix, colored red if it predates this week (i.e. data
+    -- might be stale and the user should re-scan).
+    local lastScan = TTSGCM.db.profile.lastScanTime or 0
+    local scanColor = (lastScan == 0 or lastScan < currentWeek) and "ffff5555" or "ff66ccff"
+    summary:SetText(string.format("Tracked: %d    %s    %s    %s    |  %s",
         #list,
         colored("Paid: " .. paidCount, STATUS_COLORS.paid),
         colored("Partial: " .. partialCount, STATUS_COLORS.partial),
-        colored("Unpaid: " .. unpaidCount, STATUS_COLORS.unpaid)
+        colored("Unpaid: " .. unpaidCount, STATUS_COLORS.unpaid),
+        colored("last scan: " .. formatRelative(lastScan), scanColor)
     ))
     parent:AddChild(summary)
 end

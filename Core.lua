@@ -12,6 +12,8 @@ local defaults = {
         alchemists = {},               -- [playerName] = true (parallel set, must also be in trackedPlayers)
         weeklyHistory = {},            -- [weekStart] = { minimum, alchemistMinimum, contributions, manualMarks }
         installTime = 0,               -- set on first run, used to bound how far back the user can pick week 1
+        lastScanTime = 0,              -- timestamp of the last successful bank scan (for stale-scan warnings)
+        debug = false,                 -- toggle verbose diagnostic prints in chat
         -- firstWeekStart: timestamp of the user-chosen "week 1" Tuesday. Absent until configured.
     },
 }
@@ -61,6 +63,32 @@ function TTSGCM:OnInitialize()
     self:Print("loaded. Type /gcm for commands.")
 end
 
+-- Print only when debug mode is on. Used by all the bank scan
+-- diagnostic chatter so it doesn't spam chat in normal use.
+function TTSGCM:Debug(msg)
+    if self.db and self.db.profile and self.db.profile.debug then
+        self:Print(msg)
+    end
+end
+
+function TTSGCM:RecordScanComplete()
+    if self.db and self.db.profile then
+        self.db.profile.lastScanTime = time()
+    end
+end
+
+function TTSGCM:CheckStaleScan()
+    local last = self.db.profile.lastScanTime or 0
+    if last == 0 then return end  -- never scanned, no warning yet
+    local W = self.WeekEngine
+    local currentWeekStart = W:GetCurrentWeekStart()
+    if last < currentWeekStart then
+        self:Print("|cffff5555warning:|r last bank scan was before this week began. "
+            .. "Open the guild bank to scan, or some payments may be missed. "
+            .. "If the bank log has rolled over, use the per-week editor to fix manually.")
+    end
+end
+
 function TTSGCM:OnEnable()
     self:RegisterEvent("GUILD_ROSTER_UPDATE")
     -- GUILDBANKFRAME_OPENED was removed in patch 10.0 (Dragonflight,
@@ -78,6 +106,7 @@ function TTSGCM:OnEnable()
     if n > 0 then
         self:Print(string.format("pruned %d old week(s) from history", n))
     end
+    self:CheckStaleScan()
 end
 
 function TTSGCM:GUILD_ROSTER_UPDATE()
@@ -86,17 +115,17 @@ end
 
 function TTSGCM:PLAYER_INTERACTION_MANAGER_FRAME_SHOW(_, interactionType)
     if interactionType == self.Compat:GuildBankerInteractionType() then
-        self:Print("|cff66ccffguild bank opened, requesting money log...|r")
+        self:Debug("|cff66ccffguild bank opened, requesting money log...|r")
         self.BankReader:OnGuildBankOpened()
     end
 end
 
 function TTSGCM:GUILDBANKLOG_UPDATE()
-    self:Print("|cff66ccffguild bank log update received|r")
+    self:Debug("|cff66ccffguild bank log update received|r")
     self.BankReader:OnGuildBankLogUpdate()
     if self.UI then
         self.UI:RefreshMain()
-        self:Print("|cff66ccffmain UI refresh requested|r")
+        self:Debug("|cff66ccffmain UI refresh requested|r")
     end
 end
 
@@ -120,6 +149,7 @@ local HELP_TEXT = table.concat({
     "  |cffffff00show|r - open the main window",
     "  |cffffff00minimap|r - toggle the minimap button visibility",
     "  |cffffff00dumpweek|r - print raw current-week data for debugging",
+    "  |cffffff00debug|r - toggle verbose scan diagnostics",
 }, "\n")
 
 function TTSGCM:HandleSlashCommand(input)
@@ -184,6 +214,9 @@ function TTSGCM:DispatchSlashCommand(input)
         self:Print("minimap button " .. (hidden and "hidden" or "shown"))
     elseif cmd == "dumpweek" then
         self:CmdDumpWeek()
+    elseif cmd == "debug" then
+        self.db.profile.debug = not self.db.profile.debug
+        self:Print("debug mode " .. (self.db.profile.debug and "ON" or "OFF"))
     elseif cmd == "help" then
         self:Print(HELP_TEXT)
     else
