@@ -1,0 +1,11 @@
+## Interface: 110200
+## Title: TTS Bank Tracker
+## Notes: Three Tank Strat - guild bank weekly contribution tracker
+## Author: Nachorizo
+## Version: 0.2.0
+## SavedVariables: TTSBankTrackerDB
+## IconTexture: Interface\Icons\INV_Misc_Coin_01
+
+Libs\embeds.xml
+
+Core.lua
