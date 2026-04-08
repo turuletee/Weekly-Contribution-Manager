@@ -1,10 +1,13 @@
 ## Interface: 120000
 ## Title: TTS Guild Contribution Manager
-## Notes: Three Tank Strat - guild bank weekly contribution tracker
+## Notes: Track weekly guild bank contributions and raid attendance/DKP for your raid team. Two trackers in one addon: Consumable Contribution (auto-scans guild bank deposits, compounding 1.5x penalty, hiatus mode) and Assistance Tracking (per-raid-day attendance grid, automatic DKP and gold fines, /raid chat broadcasting).
 ## Author: Nachorizo
-## Version: 0.6.5
+## Version: 1.0.0
 ## SavedVariables: TTSGuildContributionManagerDB
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
+## X-Category: Guild
+## X-Website: https://github.com/turuletee/TTS-Guild-Contribution-Manager
+## X-License: All Rights Reserved
 
 Libs\embeds.xml
 
