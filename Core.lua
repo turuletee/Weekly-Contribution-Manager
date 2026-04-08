@@ -652,9 +652,13 @@ function TTSGCM:CmdRaid(args)
     rest = rest or ""
 
     if sub == "mark" then
-        local event, present, absent = self.AssistanceTracker:MarkRaidGroup()
-        self:Print(string.format("|cff33ff99raid event %s scanned:|r %d present, %d absent",
-            event.id, present, absent))
+        -- Optional missing-status arg: "abs_no" / "abs_w" / blank
+        local missing = nil
+        if rest == "abs_no" then missing = "absent_no_notice"
+        elseif rest == "abs_w" then missing = "absent_w_notice" end
+        local event, ok, absent, untouched, empty = self.AssistanceTracker:MarkRaidGroup(missing)
+        self:Print(string.format("|cff33ff99%s:|r filled %d ok, %d absent, %d untouched, %d empty",
+            event.id, ok, absent, untouched, empty))
         if self.UI then self.UI:RefreshMain() end
     elseif sub == "show" then
         self:CmdRaidShow()

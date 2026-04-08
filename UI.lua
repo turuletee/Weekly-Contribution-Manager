@@ -53,6 +53,7 @@ local weekContext = nil
 local assistView = "weekgrid"  -- assistance router
 local assistWeekContext = nil  -- { weekStart } - the week the grid is showing
 local assistDetailContext = nil -- { player, weekStart, backTo }
+local assistMarkMissingAs = "leave"  -- "leave" | "absent_w_notice" | "absent_no_notice"
 
 local function closeMain()
     if mainFrame then
@@ -942,17 +943,30 @@ local function buildAssistWeekGrid(container)
     markBtn:SetText("Mark Raid Group")
     markBtn:SetWidth(160)
     markBtn:SetCallback("OnClick", function()
-        local event, present, absent, latePromoted = AT:MarkRaidGroup()
-        if latePromoted > 0 then
-            TTSGCM:Print(string.format("|cff33ff99rescan %s:|r %d present (%d late arrivals), %d still absent",
-                event.id, present, latePromoted, absent))
-        else
-            TTSGCM:Print(string.format("|cff33ff99raid %s scanned:|r %d present, %d absent",
-                event.id, present, absent))
-        end
+        local missing = nil
+        if assistMarkMissingAs == "absent_w_notice" then missing = "absent_w_notice"
+        elseif assistMarkMissingAs == "absent_no_notice" then missing = "absent_no_notice" end
+        local event, ok, absent, untouched, empty = AT:MarkRaidGroup(missing)
+        TTSGCM:Print(string.format("|cff33ff99%s:|r filled %d ok, %d absent, %d untouched, %d left empty",
+            event.id, ok, absent, untouched, empty))
         UI:RefreshMain()
     end)
     actions:AddChild(markBtn)
+
+    -- Dropdown to control what missing players get marked as
+    local missingDrop = AceGUI:Create("Dropdown")
+    missingDrop:SetLabel("Missing players")
+    missingDrop:SetWidth(220)
+    missingDrop:SetList({
+        leave             = "Leave empty",
+        absent_w_notice   = "Absent (notified)",
+        absent_no_notice  = "Absent (no notice)",
+    }, { "leave", "absent_w_notice", "absent_no_notice" })
+    missingDrop:SetValue(assistMarkMissingAs)
+    missingDrop:SetCallback("OnValueChanged", function(_, _, value)
+        assistMarkMissingAs = value
+    end)
+    actions:AddChild(missingDrop)
 
     local pastBtn = AceGUI:Create("Button")
     pastBtn:SetText("Past Weeks")
@@ -965,6 +979,12 @@ local function buildAssistWeekGrid(container)
     dkpBtn:SetWidth(140)
     dkpBtn:SetCallback("OnClick", function() UI:ShowAssistDkp() end)
     actions:AddChild(dkpBtn)
+
+    local auditBtn = AceGUI:Create("Button")
+    auditBtn:SetText("Audit Log")
+    auditBtn:SetWidth(110)
+    auditBtn:SetCallback("OnClick", function() UI:ShowAssistAudit() end)
+    actions:AddChild(auditBtn)
 
     local resetBtn = AceGUI:Create("Button")
     resetBtn:SetText("Reset Tier")
@@ -1382,6 +1402,91 @@ local function buildAssistHistory(container)
 end
 
 -- ----------------------------------------------------------------------
+-- ASSISTANCE AUDIT LOG VIEW
+-- ----------------------------------------------------------------------
+
+local function buildAssistAuditLog(container)
+    container:SetLayout("List")
+
+    local top = AceGUI:Create("SimpleGroup")
+    top:SetFullWidth(true)
+    top:SetLayout("Flow")
+
+    local backBtn = AceGUI:Create("Button")
+    backBtn:SetText("< Back")
+    backBtn:SetWidth(90)
+    backBtn:SetCallback("OnClick", function() UI:ShowAssistGrid() end)
+    top:AddChild(backBtn)
+
+    local title = AceGUI:Create("Label")
+    title:SetText("  " .. colored("DKP Audit Log", "ffffff00")
+        .. "  |cff999999(most recent first; capped at 200 entries)|r")
+    title:SetWidth(560)
+    top:AddChild(title)
+    container:AddChild(top)
+
+    local heading = AceGUI:Create("Heading")
+    heading:SetFullWidth(true)
+    heading:SetText("Every DKP change with timestamp and reason")
+    container:AddChild(heading)
+
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetFullWidth(true)
+    scroll:SetLayout("List")
+    scroll:SetHeight(460)
+    container:AddChild(scroll)
+
+    local A = TTSGCM.db.profile.assistance
+    local log = A.dkpAuditLog or {}
+    if #log == 0 then
+        local empty = AceGUI:Create("Label")
+        empty:SetText("\n  No DKP changes recorded yet.")
+        empty:SetFullWidth(true)
+        scroll:AddChild(empty)
+        return
+    end
+
+    -- Walk newest -> oldest
+    for i = #log, 1, -1 do
+        local entry = log[i]
+        local row = AceGUI:Create("SimpleGroup")
+        row:SetFullWidth(true)
+        row:SetLayout("Flow")
+
+        local timeStr = (entry.time and entry.time > 0) and date("%Y-%m-%d %H:%M", entry.time) or "?"
+        local timeLbl = AceGUI:Create("Label")
+        timeLbl:SetText(colored(timeStr, "ffaaaaaa"))
+        timeLbl:SetWidth(140)
+        row:AddChild(timeLbl)
+
+        local nameLbl = AceGUI:Create("Label")
+        nameLbl:SetText(colored(entry.player or "?", "ffffffff"))
+        nameLbl:SetWidth(180)
+        row:AddChild(nameLbl)
+
+        local delta = entry.delta or 0
+        local deltaColor = delta < 0 and "ffff5555" or (delta > 0 and "ff33ff99" or "ffaaaaaa")
+        local deltaLbl = AceGUI:Create("Label")
+        deltaLbl:SetText(colored(string.format("%+d", delta), deltaColor))
+        deltaLbl:SetWidth(60)
+        row:AddChild(deltaLbl)
+
+        local sourceLbl = AceGUI:Create("Label")
+        local sourceColor = (entry.source == "auto") and "ff66ccff" or "ffffff00"
+        sourceLbl:SetText(colored("[" .. (entry.source or "?") .. "]", sourceColor))
+        sourceLbl:SetWidth(80)
+        row:AddChild(sourceLbl)
+
+        local reasonLbl = AceGUI:Create("Label")
+        reasonLbl:SetText(entry.reason or "")
+        reasonLbl:SetWidth(280)
+        row:AddChild(reasonLbl)
+
+        scroll:AddChild(row)
+    end
+end
+
+-- ----------------------------------------------------------------------
 -- ASSISTANCE TAB ROUTER
 -- ----------------------------------------------------------------------
 
@@ -1395,10 +1500,144 @@ local function buildAssistanceTab(container)
         buildAssistDkpStandings(container)
     elseif assistView == "history" then
         buildAssistHistory(container)
+    elseif assistView == "auditlog" then
+        buildAssistAuditLog(container)
     else
         assistView = "weekgrid"
         buildAssistWeekGrid(container)
     end
+end
+
+-- ----------------------------------------------------------------------
+-- SETTINGS TAB (import / export of assistance data)
+-- ----------------------------------------------------------------------
+--
+-- WoW addons cannot make HTTP requests (Blizzard sandbox), so the only
+-- realistic way to share addon state across officers / install machines
+-- is via copy-paste. Export serialises db.profile.assistance to a
+-- string the user can copy out; Import takes a pasted string and
+-- merges it back in. Both use AceSerializer-3.0 which is loaded as part
+-- of the embedded Ace3 stack.
+local function buildSettingsTab(container)
+    container:SetLayout("List")
+
+    local heading = AceGUI:Create("Heading")
+    heading:SetText("Settings")
+    heading:SetFullWidth(true)
+    container:AddChild(heading)
+
+    local intro = AceGUI:Create("Label")
+    intro:SetFullWidth(true)
+    intro:SetText("\n  Import / export the Assistance Tracker data so officers can share state."
+        .. "\n  WoW addons can't talk to the internet, so this is paste-based:"
+        .. "\n  one officer Exports, sends the text via Discord/email, the next officer Imports."
+        .. "\n  Only assistance data is shared - the consumable contribution debt stays local.")
+    container:AddChild(intro)
+
+    -- Export section
+    local exportGroup = AceGUI:Create("InlineGroup")
+    exportGroup:SetTitle("Export")
+    exportGroup:SetFullWidth(true)
+    exportGroup:SetLayout("List")
+
+    local exportBox = AceGUI:Create("MultiLineEditBox")
+    exportBox:SetLabel("Press Export to fill, then Ctrl+A and Ctrl+C to copy")
+    exportBox:SetFullWidth(true)
+    exportBox:SetNumLines(8)
+    exportBox:DisableButton(true)
+    exportGroup:AddChild(exportBox)
+
+    local exportBtn = AceGUI:Create("Button")
+    exportBtn:SetText("Export Assistance Data")
+    exportBtn:SetWidth(220)
+    exportBtn:SetCallback("OnClick", function()
+        local AceSer = LibStub("AceSerializer-3.0", true)
+        if not AceSer then
+            TTSGCM:Print("|cffff5555AceSerializer-3.0 not loaded - cannot export|r")
+            return
+        end
+        local payload = TTSGCM.db.profile.assistance
+        local ok, str = pcall(function() return AceSer:Serialize(payload) end)
+        if not ok then
+            TTSGCM:Print("|cffff5555export failed:|r " .. tostring(str))
+            return
+        end
+        exportBox:SetText("TTSGCM-A1:" .. str)
+        exportBox:HighlightText()
+        TTSGCM:Print("export ready - select all and copy")
+    end)
+    exportGroup:AddChild(exportBtn)
+    container:AddChild(exportGroup)
+
+    -- Import section
+    local importGroup = AceGUI:Create("InlineGroup")
+    importGroup:SetTitle("Import")
+    importGroup:SetFullWidth(true)
+    importGroup:SetLayout("List")
+
+    local importBox = AceGUI:Create("MultiLineEditBox")
+    importBox:SetLabel("Paste an exported string here and press Import")
+    importBox:SetFullWidth(true)
+    importBox:SetNumLines(8)
+    importBox:DisableButton(true)
+    importGroup:AddChild(importBox)
+
+    local importBtn = AceGUI:Create("Button")
+    importBtn:SetText("Import (replaces current assistance data)")
+    importBtn:SetWidth(360)
+    importBtn:SetCallback("OnClick", function()
+        local raw = importBox:GetText()
+        if not raw or raw == "" then
+            TTSGCM:Print("|cffff5555nothing to import|r")
+            return
+        end
+        local payload = raw:match("^TTSGCM%-A1:(.+)$")
+        if not payload then
+            TTSGCM:Print("|cffff5555string doesn't look like a TTSGCM export (missing TTSGCM-A1: prefix)|r")
+            return
+        end
+        local AceSer = LibStub("AceSerializer-3.0", true)
+        if not AceSer then
+            TTSGCM:Print("|cffff5555AceSerializer-3.0 not loaded - cannot import|r")
+            return
+        end
+        local ok, decoded = AceSer:Deserialize(payload)
+        if not ok then
+            TTSGCM:Print("|cffff5555import failed:|r " .. tostring(decoded))
+            return
+        end
+        if type(decoded) ~= "table" then
+            TTSGCM:Print("|cffff5555imported data isn't a table - aborting|r")
+            return
+        end
+        StaticPopupDialogs["TTSGCM_CONFIRM_IMPORT"] = {
+            text = "Replace current assistance data with the imported data?\n"
+                .. "Your tracked-players list and consumable contribution data are NOT affected.\n"
+                .. "This cannot be undone.",
+            button1 = "Replace", button2 = "Cancel",
+            OnAccept = function()
+                TTSGCM.db.profile.assistance = decoded
+                -- Re-run validation so any missing fields are coerced back into shape
+                if TTSGCM.OnInitialize then
+                    -- We don't actually call OnInitialize again - just
+                    -- defensively ensure subtree fields exist by going
+                    -- through the same coercion validateProfile does.
+                    local A = TTSGCM.db.profile.assistance
+                    if type(A.fineRules)   ~= "table" then A.fineRules = {}   end
+                    if type(A.dkp)         ~= "table" then A.dkp = {}         end
+                    if type(A.dkpAuditLog) ~= "table" then A.dkpAuditLog = {} end
+                    if type(A.raidEvents)  ~= "table" then A.raidEvents = {}  end
+                    if type(A.weeklyDebt)  ~= "table" then A.weeklyDebt = {}  end
+                end
+                TTSGCM:Print("|cff33ff99assistance data imported.|r")
+                UI:RefreshMain()
+            end,
+            timeout = 0, whileDead = true, hideOnEscape = true,
+        }
+        StaticPopup_Show("TTSGCM_CONFIRM_IMPORT")
+    end)
+    importGroup:AddChild(importBtn)
+    container:AddChild(importGroup)
 end
 
 local function buildMainContents(frame)
@@ -1416,6 +1655,7 @@ local function buildMainContents(frame)
     tabGroup:SetTabs({
         { text = "Consumable Contribution", value = "consumable" },
         { text = "Assistance Tracking",     value = "assistance" },
+        { text = "Settings",                value = "settings"   },
     })
     tabGroup:SetCallback("OnGroupSelected", function(container, _, group)
         mainTab = group
@@ -1423,8 +1663,10 @@ local function buildMainContents(frame)
         container:SetLayout("List")
         if group == "consumable" then
             buildConsumableTab(container)
-        else
+        elseif group == "assistance" then
             buildAssistanceTab(container)
+        else
+            buildSettingsTab(container)
         end
     end)
     tabGroup:SelectTab(mainTab)
@@ -1538,6 +1780,12 @@ end
 function UI:ShowAssistHistory()
     mainTab = "assistance"
     assistView = "history"
+    if mainFrame then self:RefreshMain() else self:OpenMain() end
+end
+
+function UI:ShowAssistAudit()
+    mainTab = "assistance"
+    assistView = "auditlog"
     if mainFrame then self:RefreshMain() else self:OpenMain() end
 end
 

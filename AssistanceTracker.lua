@@ -445,61 +445,52 @@ local function getCurrentRaidNamesSet()
     return set
 end
 
--- Marks today's raid event.
+-- Marks today's raid event. NEVER overwrites an existing status -
+-- only fills in missing slots. The officer's manual overrides and
+-- previous-scan results are always preserved.
 --
--- First scan of the day (event.scannedAt == 0): every tracked player
--- gets set to either ok or absent_no_notice based on whether they're
--- in the raid group right now.
+-- For each tracked player:
+--   * Already has a status (any value): leave alone
+--   * In raid + status nil: set to ok
+--   * Not in raid + status nil: set to `missingStatus` if provided,
+--     or leave nil (so the officer can fill it in later)
 --
--- Subsequent scans: ONLY flip absent_no_notice -> ok for players who
--- weren't in raid before but are now (i.e. they showed up late).
--- Anyone already marked something else (ok, late_*, vacation, etc.)
--- is left alone. This matches the user spec: re-clicking the button
--- should never downgrade an existing mark.
+-- The `missingStatus` argument lets the officer pick what to mark
+-- absent players as. Valid values:
+--    nil                        leave missing players empty
+--    "absent_w_notice"          mark them absent (with notice)
+--    "absent_no_notice"         mark them absent (no notice)
 --
--- Returns: event, presentCount, absentCount, latePromoted
-function AssistanceTracker:MarkRaidGroup()
+-- Returns: event, filledOk, filledAbsent, untouched, leftEmpty
+function AssistanceTracker:MarkRaidGroup(missingStatus)
     local event = getOrCreateRaidEventForToday()
-    -- firstScannedAt is set the FIRST time MarkRaidGroup runs for this
-    -- event. We track it separately from scannedAt (which updates on
-    -- every scan) so a pre-button manual status override doesn't get
-    -- overwritten by a subsequent button click.
-    local isFirstScan = (event.firstScannedAt or 0) == 0
-    if isFirstScan then event.firstScannedAt = time() end
     event.scannedAt = time()
+    if (event.firstScannedAt or 0) == 0 then event.firstScannedAt = time() end
+
     local raidSet = getCurrentRaidNamesSet()
-    local presentCount, absentCount, latePromoted = 0, 0, 0
+    local filledOk, filledAbsent, untouched, leftEmpty = 0, 0, 0, 0
 
     for trackedName in pairs(getProfile().trackedPlayers) do
         local bare = trackedName:gsub("%-.*$", ""):lower()
         local inRaid = raidSet[bare] ~= nil
         local current = event.attendance and event.attendance[trackedName]
 
-        if isFirstScan then
-            if inRaid then
-                self:SetStatus(event.id, trackedName, STATUS.OK)
-                presentCount = presentCount + 1
-            else
-                self:SetStatus(event.id, trackedName, STATUS.ABSENT_NO_NOTICE)
-                absentCount = absentCount + 1
-            end
+        if current then
+            -- Never overwrite an existing status
+            untouched = untouched + 1
+        elseif inRaid then
+            self:SetStatus(event.id, trackedName, STATUS.OK)
+            filledOk = filledOk + 1
         else
-            if inRaid then
-                if current == nil or current == STATUS.ABSENT_NO_NOTICE then
-                    if current == STATUS.ABSENT_NO_NOTICE then
-                        latePromoted = latePromoted + 1
-                    end
-                    self:SetStatus(event.id, trackedName, STATUS.OK)
-                end
-                presentCount = presentCount + 1
+            if missingStatus then
+                self:SetStatus(event.id, trackedName, missingStatus)
+                filledAbsent = filledAbsent + 1
             else
-                if current == STATUS.ABSENT_NO_NOTICE or current == nil then
-                    absentCount = absentCount + 1
-                end
+                leftEmpty = leftEmpty + 1
             end
         end
     end
-    return event, presentCount, absentCount, latePromoted
+    return event, filledOk, filledAbsent, untouched, leftEmpty
 end
 
 -- ----------------------------------------------------------------------
