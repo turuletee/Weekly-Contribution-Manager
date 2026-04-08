@@ -6,10 +6,12 @@ _G.TTSGCM = TTSGCM -- expose for in-game debugging via /dump TTSGCM
 
 local defaults = {
     profile = {
-        minContribution = 0,    -- copper required per tracked player per week (sticky default for new weeks)
-        trackedPlayers = {},    -- [playerName] = true
-        weeklyHistory = {},     -- [weekStartTimestamp] = { minimum, contributions = {[name]=copper}, manualMarks = {[name]=copper} }
-        installTime = 0,        -- set on first run, used to bound how far back the user can pick week 1
+        minContribution = 0,           -- copper required per regular tracked player per week (sticky default)
+        alchemistMinContribution = 0,  -- copper required per alchemist per week (sticky default)
+        trackedPlayers = {},           -- [playerName] = true
+        alchemists = {},               -- [playerName] = true (parallel set, must also be in trackedPlayers)
+        weeklyHistory = {},            -- [weekStart] = { minimum, alchemistMinimum, contributions, manualMarks }
+        installTime = 0,               -- set on first run, used to bound how far back the user can pick week 1
         -- firstWeekStart: timestamp of the user-chosen "week 1" Tuesday. Absent until configured.
     },
 }
@@ -29,10 +31,21 @@ local function validateProfile(profile)
             if type(v.contributions) ~= "table" then v.contributions = {} end
             if type(v.manualMarks) ~= "table" then v.manualMarks = {} end
             if v.minimum ~= nil and type(v.minimum) ~= "number" then v.minimum = nil end
+            if v.alchemistMinimum ~= nil and type(v.alchemistMinimum) ~= "number" then
+                v.alchemistMinimum = nil
+            end
         end
     end
     if type(profile.trackedPlayers) ~= "table" then profile.trackedPlayers = {} end
+    if type(profile.alchemists) ~= "table" then profile.alchemists = {} end
+    -- An alchemist must also be a tracked player. Drop dangling entries.
+    for name in pairs(profile.alchemists) do
+        if not profile.trackedPlayers[name] then
+            profile.alchemists[name] = nil
+        end
+    end
     if type(profile.minContribution) ~= "number" then profile.minContribution = 0 end
+    if type(profile.alchemistMinContribution) ~= "number" then profile.alchemistMinContribution = 0 end
     if profile.firstWeekStart ~= nil and type(profile.firstWeekStart) ~= "number" then
         profile.firstWeekStart = nil
     end
@@ -86,7 +99,9 @@ local HELP_TEXT = table.concat({
     "  |cffffff00status|r / |cffffff00week|r / |cffffff00scan|r / |cffffff00history [N]|r",
     "  |cffffff00track <name>|r / |cffffff00untrack <name>|r / |cffffff00tracked|r",
     "  |cffffff00roster [rankIndex] [search]|r / |cffffff00ranks|r",
-    "  |cffffff00setmin <gold>|r - set this week's minimum",
+    "  |cffffff00setmin <gold>|r - set this week's regular minimum",
+    "  |cffffff00setalchmin <gold>|r - set this week's alchemist minimum",
+    "  |cffffff00alchemist <name>|r - toggle alchemist status for a tracked player",
     "  |cffffff00mark <player> <gold>|r - manually credit a player this week",
     "  |cffffff00clearmark <player>|r - clear this week's manual mark for a player",
     "  |cffffff00unpaid|r / |cffffff00owed [player]|r",
@@ -134,6 +149,10 @@ function TTSGCM:DispatchSlashCommand(input)
         self:CmdHistory(rest)
     elseif cmd == "setmin" then
         self:CmdSetMin(rest)
+    elseif cmd == "setalchmin" then
+        self:CmdSetAlchemistMin(rest)
+    elseif cmd == "alchemist" then
+        self:CmdToggleAlchemist(rest)
     elseif cmd == "mark" then
         self:CmdMark(rest)
     elseif cmd == "clearmark" then
@@ -275,7 +294,26 @@ function TTSGCM:CmdSetMin(args)
     if not g then self:Print("usage: /ttsgcm setmin <gold>") return end
     local copper = self.DebtEngine:GoldToCopper(g)
     self.DebtEngine:SetCurrentWeekMin(copper)
-    self:Print(string.format("this week's minimum set to %s", self.DebtEngine:FormatCopper(copper)))
+    self:Print(string.format("this week's regular minimum set to %s", self.DebtEngine:FormatCopper(copper)))
+end
+
+function TTSGCM:CmdSetAlchemistMin(args)
+    local g = tonumber((args or ""):match("([%d%.]+)"))
+    if not g then self:Print("usage: /ttsgcm setalchmin <gold>") return end
+    local copper = self.DebtEngine:GoldToCopper(g)
+    self.DebtEngine:SetCurrentWeekAlchemistMin(copper)
+    self:Print(string.format("this week's alchemist minimum set to %s", self.DebtEngine:FormatCopper(copper)))
+end
+
+function TTSGCM:CmdToggleAlchemist(args)
+    local name = (args or ""):match("^(%S+)")
+    if not name then self:Print("usage: /ttsgcm alchemist <name>") return end
+    if not self.TrackedPlayers:IsTracked(name) then
+        self:Print(name .. " is not tracked. Add them first with /ttsgcm track " .. name)
+        return
+    end
+    local nowAlch = self.DebtEngine:ToggleAlchemist(name)
+    self:Print(name .. " is " .. (nowAlch and "now an alchemist" or "no longer an alchemist"))
 end
 
 function TTSGCM:CmdMark(args)

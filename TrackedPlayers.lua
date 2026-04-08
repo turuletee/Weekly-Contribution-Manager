@@ -22,6 +22,10 @@ function TrackedPlayers:Remove(name)
     if not name then return false end
     local was = TTSGCM.db.profile.trackedPlayers[name] ~= nil
     TTSGCM.db.profile.trackedPlayers[name] = nil
+    -- An alchemist must also be a tracked player; drop the flag.
+    if TTSGCM.db.profile.alchemists then
+        TTSGCM.db.profile.alchemists[name] = nil
+    end
     return was
 end
 
