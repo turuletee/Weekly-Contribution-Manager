@@ -105,6 +105,17 @@ local function colored(s, hex)
     return "|c" .. hex .. s .. "|r"
 end
 
+-- Truncate a note string so it fits within the note column.
+-- WoW's variable-width font renders roughly 7-8px per character at UI scale;
+-- 20 characters is a safe ceiling for the 150px column we allocate.
+local NOTE_MAX_CHARS = 20
+local function truncateNote(text)
+    if not text or text == "" then return "" end
+    if #text <= NOTE_MAX_CHARS then return text end
+    -- Leave room for the three dots
+    return text:sub(1, NOTE_MAX_CHARS - 3) .. "..."
+end
+
 -- ----------------------------------------------------------------------
 -- LIST VIEW
 -- ----------------------------------------------------------------------
@@ -872,10 +883,10 @@ local function buildAssistRow(parent, name, weekStart, raidDays)
     row:SetFullWidth(true)
     row:SetLayout("Flow")
 
-    -- Name
+    -- Name (WoW names cap at 12 chars; 160px is comfortable)
     local nameLbl = AceGUI:Create("Label")
     nameLbl:SetText(colored(name, "ffffffff"))
-    nameLbl:SetWidth(180)
+    nameLbl:SetWidth(160)
     row:AddChild(nameLbl)
 
     -- 3 day pills
@@ -893,7 +904,7 @@ local function buildAssistRow(parent, name, weekStart, raidDays)
     local dkp = AT:GetDKP(name)
     local dkpColor = (dkp < 0) and "ffff5555" or "ff33ff99"
     dkpLbl:SetText(colored(string.format("DKP %d", dkp), dkpColor))
-    dkpLbl:SetWidth(90)
+    dkpLbl:SetWidth(80)
     row:AddChild(dkpLbl)
 
     -- Fines this week
@@ -908,17 +919,53 @@ local function buildAssistRow(parent, name, weekStart, raidDays)
     else
         fineLbl:SetText(colored(D:FormatCopper(rem) .. " left", "ffff5555"))
     end
-    fineLbl:SetWidth(170)
+    fineLbl:SetWidth(130)
     row:AddChild(fineLbl)
+
+    -- Note preview (truncated to fit column; full text editable via note button)
+    local noteText = TTSGCM:GetPlayerNote(name)
+    local noteLbl = AceGUI:Create("Label")
+    noteLbl:SetText(noteText ~= "" and colored(truncateNote(noteText), "ffcccccc") or colored("—", "ff444444"))
+    noteLbl:SetWidth(150)
+    row:AddChild(noteLbl)
 
     -- Edit button
     local editBtn = AceGUI:Create("Button")
     editBtn:SetText("Edit")
-    editBtn:SetWidth(70)
+    editBtn:SetWidth(65)
     editBtn:SetCallback("OnClick", function()
         UI:OpenAssistDetail(name, weekStart)
     end)
     row:AddChild(editBtn)
+
+    -- Note button: opens a popup to write/edit this player's note
+    local noteBtn = AceGUI:Create("Button")
+    noteBtn:SetText("Note")
+    noteBtn:SetWidth(60)
+    noteBtn:SetCallback("OnClick", function()
+        -- Redefine each click so the closure captures the correct player name
+        StaticPopupDialogs["TTSGCM_EDIT_NOTE"] = {
+            text = "Note for " .. name .. ":",
+            button1 = "Save",
+            button2 = "Cancel",
+            hasEditBox = 1,
+            maxLetters = 200,
+            OnShow = function(self)
+                self.editBox:SetText(TTSGCM:GetPlayerNote(name))
+                self.editBox:SetFocus()
+            end,
+            OnAccept = function(self)
+                TTSGCM:SetPlayerNote(name, self.editBox:GetText())
+                UI:RefreshMain()
+            end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+            preferredIndex = 3,
+        }
+        StaticPopup_Show("TTSGCM_EDIT_NOTE")
+    end)
+    row:AddChild(noteBtn)
 
     parent:AddChild(row)
 end
@@ -1022,11 +1069,13 @@ local function buildAssistWeekGrid(container)
         l:SetWidth(w)
         headerRow:AddChild(l)
     end
-    makeHdr("Player", 180)
+    makeHdr("Player", 160)
     for _, day in ipairs(raidDays) do makeHdr(day.label .. " " .. day.id:sub(6), 72) end
-    makeHdr("DKP", 90)
-    makeHdr("Fines", 170)
-    makeHdr("", 70)
+    makeHdr("DKP", 80)
+    makeHdr("Fines", 130)
+    makeHdr("Note", 150)
+    makeHdr("", 65)   -- Edit
+    makeHdr("", 60)   -- Note btn
     container:AddChild(headerRow)
 
     -- Scroll for the rows
@@ -1233,6 +1282,35 @@ local function buildAssistPlayerDetail(container, ctx)
     fineGroup:AddChild(clearBtn)
 
     container:AddChild(fineGroup)
+
+    -- Player note block
+    local noteGroup = AceGUI:Create("InlineGroup")
+    noteGroup:SetTitle("Player note")
+    noteGroup:SetFullWidth(true)
+    noteGroup:SetLayout("Flow")
+
+    local noteBox = AceGUI:Create("EditBox")
+    noteBox:SetLabel("Note (max 200 characters)")
+    -- Use ~680px so the Save button sits on the same line
+    noteBox:SetWidth(680)
+    noteBox:SetText(TTSGCM:GetPlayerNote(name))
+    -- Allow saving by pressing Enter as well
+    noteBox:SetCallback("OnEnterPressed", function(_, _, value)
+        TTSGCM:SetPlayerNote(name, value)
+        UI:RefreshMain()
+    end)
+    noteGroup:AddChild(noteBox)
+
+    local saveNoteBtn = AceGUI:Create("Button")
+    saveNoteBtn:SetText("Save")
+    saveNoteBtn:SetWidth(80)
+    saveNoteBtn:SetCallback("OnClick", function()
+        TTSGCM:SetPlayerNote(name, noteBox:GetText())
+        UI:RefreshMain()
+    end)
+    noteGroup:AddChild(saveNoteBtn)
+
+    container:AddChild(noteGroup)
 end
 
 -- ----------------------------------------------------------------------

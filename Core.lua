@@ -18,6 +18,8 @@ local defaults = {
         hiatusActivatedAt = 0,         -- timestamp when current hiatus was started (0 if never)
         -- firstWeekStart: timestamp of the user-chosen "week 1" Tuesday. Absent until configured.
 
+        playerNotes = {},              -- [playerName] = string (persistent per-player notes)
+
         -- Assistance Tracker subtree (separate from Consumable Contribution data)
         assistance = {
             -- All gold values are stored in copper.
@@ -64,6 +66,12 @@ local function validateProfile(profile)
             if v.alchemistMinimum ~= nil and type(v.alchemistMinimum) ~= "number" then
                 v.alchemistMinimum = nil
             end
+        end
+    end
+    if type(profile.playerNotes) ~= "table" then profile.playerNotes = {} end
+    for k, v in pairs(profile.playerNotes) do
+        if type(k) ~= "string" or type(v) ~= "string" then
+            profile.playerNotes[k] = nil
         end
     end
     if type(profile.trackedPlayers) ~= "table" then profile.trackedPlayers = {} end
@@ -121,6 +129,19 @@ function TTSGCM:OnInitialize()
     end
     self:RegisterChatCommand("gcm", "HandleSlashCommand")
     self:Print("loaded. Type /gcm for commands.")
+end
+
+-- ----------------------------------------------------------------------
+-- Player notes
+-- ----------------------------------------------------------------------
+
+function TTSGCM:GetPlayerNote(name)
+    return self.db.profile.playerNotes[name] or ""
+end
+
+function TTSGCM:SetPlayerNote(name, text)
+    -- Store nil instead of empty string to keep the table clean
+    self.db.profile.playerNotes[name] = (text ~= "" and text) or nil
 end
 
 -- Print only when debug mode is on. Used by all the bank scan
