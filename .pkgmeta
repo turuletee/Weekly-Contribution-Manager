@@ -8,6 +8,7 @@
 # (the folder name MUST match the .toc file name without the extension).
 
 package-as: TTSGuildContributionManager
+curse-id: 1510516
 
 # Files and directories that should NOT be included in the build zip.
 # Anything build/dev-related stays out so the published addon is lean.
