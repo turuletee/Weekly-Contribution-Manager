@@ -51,4 +51,4 @@ jobs:
           # Uncomment after you create the CurseForge project, generate
           # an API token at https://legacy.curseforge.com/account/api-tokens,
           # and add it as a repo secret named CF_API_KEY:
-          # CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
