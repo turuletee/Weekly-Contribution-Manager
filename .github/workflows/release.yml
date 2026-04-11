@@ -7,9 +7,7 @@
 #     for WoW to recognise the addon)
 #   - Strip ignored files (.git, .github, README.md, etc.)
 #   - Upload the built zip as a GitHub release asset for that tag
-#   - OPTIONALLY upload to CurseForge if CF_API_KEY is set as a repo
-#     secret (commented out below; uncomment after creating the
-#     CurseForge project and adding the secret in repo Settings)
+#   - Upload to CurseForge if CF_API_KEY is set as a repo secret
 #
 # Manual trigger is also enabled (workflow_dispatch) so you can run it
 # from the Actions tab against any branch/tag without having to push a
@@ -26,29 +24,26 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # The packager needs write access to create the GitHub Release and
-    # upload the built zip as an asset. By default GITHUB_TOKEN only
-    # has read permissions on most repos, so we explicitly grant
-    # contents:write here.
     permissions:
       contents: write
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
-          # Full history is needed so the packager can derive a clean
-          # version from the tag.
           fetch-depth: 0
+
+      - name: Debug secret presence
+        run: |
+          if [ -n "$CF_API_KEY" ]; then
+            echo "CF_API_KEY is set (length: ${#CF_API_KEY})"
+          else
+            echo "CF_API_KEY is EMPTY or not passed"
+          fi
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
 
       - name: Build and release
         uses: BigWigsMods/packager@v2
         env:
-          # The BigWigs packager script reads the GitHub auth token from
-          # GITHUB_OAUTH (NOT the more common GITHUB_TOKEN name). The
-          # automatic ${{ secrets.GITHUB_TOKEN }} value is fine here -
-          # it's just expected under a different env var name.
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
-          # Uncomment after you create the CurseForge project, generate
-          # an API token at https://legacy.curseforge.com/account/api-tokens,
-          # and add it as a repo secret named CF_API_KEY:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
